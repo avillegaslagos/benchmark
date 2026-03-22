@@ -1,0 +1,26 @@
+# Datos CMF (pesados, no van al repo)
+data/raw/
+data/consolidado/
+data/output/
+data/log/
+data/IFRS_mapeo.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+
+# Entornos
+.conda/
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini 
