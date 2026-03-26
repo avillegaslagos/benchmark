@@ -294,12 +294,14 @@ def calcular_roa(df_b1: pd.DataFrame, df_r1: pd.DataFrame) -> pd.DataFrame:
     return (resultado * 12 / activos * 100).round(2)
 
 def calcular_roe(df_b1: pd.DataFrame, df_r1: pd.DataFrame) -> pd.DataFrame:
-    """ROE = Resultado mensual × 12 / Patrimonio. En %."""
+    """ROE = Resultado mensual × 12 / Patrimonio promedio. En %."""
     df_b = _solo_bancos(df_b1)
     df_r = _solo_bancos(df_r1)
     resultado  = _pivot(_flujo(df_r, CTA_RESULTADO_EJERCICIO))
     patrimonio = _pivot(_saldo(df_b, CTA_PATRIMONIO))
-    return (resultado * 12 / patrimonio * 100).round(2)
+    patrimonio_prom = (patrimonio + patrimonio.shift(1)) / 2
+    return (resultado * 12 / patrimonio_prom * 100).round(2)
+
 
 def calcular_eficiencia(df_r1: pd.DataFrame) -> pd.DataFrame:
     """Eficiencia = Gastos operacionales / Ingreso bruto. En %. Menor = mejor."""
@@ -688,3 +690,232 @@ def evolucion_cartera_inversiones(df_b1: pd.DataFrame) -> dict[str, pd.DataFrame
                 index="periodo", columns="banco_nombre", values="valor", aggfunc="sum"
             )
     return resultado
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER GRANULAR — suma cuentas por CODIGO_IFRS (no cuenta resumen)
+# ─────────────────────────────────────────────────────────────────────────────
+def _sum_cuentas_granulares(df_b1: pd.DataFrame, cuentas: list,
+                             banco: str, periodo) -> float:
+    """Suma saldos de cuentas granulares (CODIGO_IFRS) para un banco y período."""
+    sub = df_b1[
+        (df_b1["cuenta"].isin(cuentas)) &
+        (df_b1["banco_nombre"] == banco) &
+        (df_b1["periodo"] == periodo)
+    ]["saldo_mes_actual"]
+    return float(sub.sum()) if not sub.empty else 0.0
+
+
+def _evolucion_granular(df_b1: pd.DataFrame,
+                         mapa: dict[str, list]) -> dict[str, pd.DataFrame]:
+    """Helper genérico: evolución histórica de cualquier mapa {tipo: [cuentas]}."""
+    df_b = _solo_bancos(df_b1)
+    resultado = {}
+    for tipo, cuentas in mapa.items():
+        filas = []
+        for periodo in sorted(df_b["periodo"].unique()):
+            for banco in BANCOS.values():
+                val = _sum_cuentas_granulares(df_b, cuentas, banco, periodo)
+                filas.append({"periodo": periodo, "banco_nombre": banco, "valor": val})
+        df_tipo = pd.DataFrame(filas)
+        resultado[tipo] = df_tipo.pivot_table(
+            index="periodo", columns="banco_nombre", values="valor", aggfunc="sum"
+        )
+    return resultado
+
+
+def _composicion_granular(df_b1: pd.DataFrame,
+                           mapa: dict[str, list],
+                           periodo) -> pd.DataFrame:
+    """Helper genérico: composición puntual de cualquier mapa {tipo: [cuentas]}."""
+    df_b = _solo_bancos(df_b1)
+    filas = []
+    for tipo, cuentas in mapa.items():
+        for banco in BANCOS.values():
+            val = _sum_cuentas_granulares(df_b, cuentas, banco, periodo)
+            filas.append({"tipo": tipo, "banco": banco, "valor": val})
+    return pd.DataFrame(filas)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PASIVOS — DEPÓSITOS por E2 (Vistas / DAP / Ahorro)
+# ─────────────────────────────────────────────────────────────────────────────
+CUENTAS_DEPOSITOS_E2 = {
+    "Vistas": [
+        "241000101","241000102","241000103","241000104",
+        "241000201","241000202","241000301",
+        "241000401","241000402",
+        "241000501","241000502","241000503","241000504","241000505",
+        "241000506","241000507","241000508","241000509","241000510",
+        "241000511","241000512","241000513","241000590",
+    ],
+    "DAP":    ["242000100"],
+    "Ahorro": ["242000201","242000202"],
+}
+
+def composicion_depositos_e2(df_b1: pd.DataFrame, periodo) -> pd.DataFrame:
+    """Composición de depósitos por tipo E2 (Vistas / DAP / Ahorro)."""
+    return _composicion_granular(df_b1, CUENTAS_DEPOSITOS_E2, periodo)
+
+def evolucion_depositos_e2(df_b1: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Evolución histórica de depósitos por tipo E2, pivotada por banco."""
+    return _evolucion_granular(df_b1, CUENTAS_DEPOSITOS_E2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PASIVOS — FONDEO DE MERCADOS por G2
+# ─────────────────────────────────────────────────────────────────────────────
+CUENTAS_FONDEO_G2 = {
+    "Ventas con Pacto": [
+        "243000101","243000102","243000103",
+        "243000201","243000202","243000203",
+        "243000301","243000302",
+        "243000401","243000402",
+    ],
+    "Obligaciones con Bancos": [
+        "244250101","244250102","244250103",
+        "244250201","244250202","244250203","244250204","244250209",
+        "244500101","244500102","244500103",
+        "244500201","244500202","244500203","244500204","244500209",
+        "244700100","244700200",
+    ],
+    "Letras Hipotecarias": ["245000101","245000102"],
+    "Bonos Corrientes":    ["245000201"],
+    "Bonos Subordinados":  ["245000203","255000101","255000102","255000200"],
+}
+
+def composicion_fondeo_g2(df_b1: pd.DataFrame, periodo) -> pd.DataFrame:
+    """Composición de Fondeo de Mercados por tipo G2."""
+    return _composicion_granular(df_b1, CUENTAS_FONDEO_G2, periodo)
+
+def evolucion_fondeo_g2(df_b1: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Evolución histórica de Fondeo Mercados por tipo G2, pivotada por banco."""
+    return _evolucion_granular(df_b1, CUENTAS_FONDEO_G2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PASIVOS — PASIVOS PERMANENTES por G2
+# ─────────────────────────────────────────────────────────────────────────────
+CUENTAS_PASIVOS_PERMANENTES_G2 = {
+    "Otros Pasivos": [
+        "207000101","207000102","207000200",
+        "207000301","207000309","207000311","207000319",
+        "211000101","211000102","211000103","211000104","211000105","211000190",
+        "213000101","213000102","213000103","213000109",
+        "218000001","218000002","218000003","218000009",
+        "230000101","230000102","230000103","230000104","230000105","230000190",
+        "242000301","242000302","242000390",
+        "246000101","246000102",
+        "246000201","246000202","246000203","246000204","246000205",
+        "246000206","246000207","246000208","246000290",
+        "246000301","246000302","246000303","246000304","246000305","246000390",
+        "250000000","280000000","285000000",
+        "290000101","290000102","290000103","290000104",
+        "290000201","290000202","290000203",
+        "290000301","290000302","290000303","290000304","290000305",
+        "290000306","290000307","290000308","290000309","290000390",
+        "290000400","290000501","290000502","290000700",
+        "290000801","290000802","290000803","290000809",
+        "290000900","290001000","290001100","290001200",
+    ],
+    "Provisiones": [
+        "260000101","260000102","260000103","260000104","260000105",
+        "260000106","260000107","260000109",
+        "260000200","260000300","260000400","260000500","260000600","260000900",
+        "265000101","265000102","265000200","265000300",
+        "271000100","271000200","271000400",
+        "271000501","271000502","271000503","271000504","271000505",
+        "271000601","271000602",
+        "271000701","271000702","271000703","271000704","271000705",
+        "271000800","271000900",
+        "272000000","273000000",
+        "274000100","274000200","274000300",
+        "275000100","275000200","275000300","275000400","275000500","275000600",
+        "279000100","279000200","279000300",
+    ],
+    "Patrimonio": [
+        "311000100","311000200","311000300","311000400","311000500","311000600",
+        "312000000","313000000",
+        "320000100","320000200","320000300","320000400",
+        "331000100","331000201","331000202","331000203","331000209",
+        "331000300","331000400","331000500","331000900",
+        "332000100","332000200","332000300","332000400",
+        "332000500","332000600","332000700","332000900",
+        "340000100","340000200","350000000",
+        "360000101","360000102","360000200","360000300",
+        "390000000",
+    ],
+}
+
+def composicion_pasivos_permanentes_g2(df_b1: pd.DataFrame, periodo) -> pd.DataFrame:
+    """Composición de Pasivos Permanentes por tipo G2."""
+    return _composicion_granular(df_b1, CUENTAS_PASIVOS_PERMANENTES_G2, periodo)
+
+def evolucion_pasivos_permanentes_g2(df_b1: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Evolución histórica de Pasivos Permanentes por tipo G2, pivotada por banco."""
+    return _evolucion_granular(df_b1, CUENTAS_PASIVOS_PERMANENTES_G2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACTIVOS FINANCIEROS por G2
+# ─────────────────────────────────────────────────────────────────────────────
+CUENTAS_ACTIVOS_FINANCIEROS_G2 = {
+    "Efectivo": [
+        "105000101","105000102","105000103",
+    ],
+    "Depósitos en Bancos": [
+        "105000201","105000202","105000209",
+        "105000301","105000302","105000309",
+        "105000400","105000500",
+    ],
+    "Cartera de Inversiones": [
+        # Negociación (112)
+        "112000101","112000102","112000109",
+        "112000201","112000202","112000209",
+        "112000301","112000302","112000303","112000304","112000309",
+        # Fondos mutuos / patrimonio (113)
+        "113000101","113000102","113000201","113000202","113000400",
+        # DPV (115)
+        "115250101","115250102","115250109",
+        "115250201","115250202","115250209",
+        "115250301","115250302","115250303","115250304","115250309",
+        "115500101","115500102",
+        "115500301","115500302","115500303","115500304",
+        # DPV legacy (122)
+        "122000101","122000102","122000109",
+        "122000201","122000202","122000209",
+        "122000301","122000302","122000303","122000304","122000309",
+        # VCTO (123)
+        "123000301","123000302","123000303","123000304","123000400",
+        # VCTO nuevo (141500)
+        "141500101","141500102","141500109",
+        "141500201","141500202","141500209",
+        "141500301","141500302","141500303","141500304","141500309",
+        "141500901","141500902","141500903",
+    ],
+    "Compras con Pactos": [
+        "141000101","141000102","141000103",
+        "141000201","141000202","141000203",
+        "141000301","141000302",
+        "141000401","141000402",
+        "141000901","141000902","141000903",
+    ],
+    "Adeudado por Bancos": [
+        "143100101","143100102","143100103","143100104","143100105",
+        "143100106","143100107","143100190",
+        "143150101","143150102","143150103",
+        "143200101","143200102","143200103","143200104","143200105",
+        "143200106","143200108","143200190",
+        "143250101","143250102","143250103",
+        "143300101","143300102","143300103",
+        "143400101","143400102","143400103",
+    ],
+}
+
+def composicion_activos_financieros_g2(df_b1: pd.DataFrame, periodo) -> pd.DataFrame:
+    """Composición de Activos Financieros por tipo G2."""
+    return _composicion_granular(df_b1, CUENTAS_ACTIVOS_FINANCIEROS_G2, periodo)
+
+def evolucion_activos_financieros_g2(df_b1: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Evolución histórica de Activos Financieros por tipo G2, pivotada por banco."""
+    return _evolucion_granular(df_b1, CUENTAS_ACTIVOS_FINANCIEROS_G2)
